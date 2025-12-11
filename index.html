@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rhythm Bloom</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Outfit:wght@400;700;900&display=swap');
+      
+      body {
+        background-color: #050505;
+        color: white;
+        font-family: 'Outfit', sans-serif;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      
+      .text-stroke {
+        -webkit-text-stroke: 2px black;
+      }
+      
+      .bloom-text {
+        text-shadow: 0 0 10px currentColor, 0 0 20px currentColor, 0 0 40px currentColor;
+      }
+
+      /* CRT Scanline Effect */
+      .scanlines {
+        background: linear-gradient(
+          to bottom,
+          rgba(255,255,255,0),
+          rgba(255,255,255,0) 50%,
+          rgba(0,0,0,0.2) 50%,
+          rgba(0,0,0,0.2)
+        );
+        background-size: 100% 4px;
+        pointer-events: none;
+      }
+
+      .vignette {
+        background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,0.8) 100%);
+        pointer-events: none;
+      }
+
+      /* Animations */
+      @keyframes pulse-beat {
+        0% { transform: scale(1.5); }
+        100% { transform: scale(1); }
+      }
+
+      .animate-pulse-beat {
+        animation: pulse-beat 0.1s cubic-bezier(0, 0, 0.2, 1);
+      }
+
+      @keyframes glitch {
+        0% { transform: translate(0); }
+        20% { transform: translate(-2px, 2px); }
+        40% { transform: translate(-2px, -2px); }
+        60% { transform: translate(2px, 2px); }
+        80% { transform: translate(2px, -2px); }
+        100% { transform: translate(0); }
+      }
+
+      .glitch-text {
+        animation: glitch 0.2s cubic-bezier(.25, .46, .45, .94) both infinite;
+        color: #d946ef; /* Fuchsia-500 */
+        text-shadow: 2px 2px #0ea5e9, -2px -2px #f43f5e;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.1/",
+    "react": "https://esm.sh/react@^19.2.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
