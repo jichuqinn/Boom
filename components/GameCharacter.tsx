@@ -5,7 +5,7 @@ interface GameCharacterProps {
   isFinished: boolean;
 }
 
-const GameCharacter: React.FC<GameCharacterProps> = ({ isHit, isFinished }) => {
+const GameCharacter: React.FC<GameCharacterProps> = React.memo(({ isHit, isFinished }) => {
   const baseClasses = "relative transition-all duration-75 ease-out";
   const scaleClass = isFinished 
     ? "scale-[2] -translate-y-20" 
@@ -43,6 +43,8 @@ const GameCharacter: React.FC<GameCharacterProps> = ({ isHit, isFinished }) => {
       )}
     </div>
   );
-};
+});
+
+GameCharacter.displayName = 'GameCharacter';
 
 export default GameCharacter;

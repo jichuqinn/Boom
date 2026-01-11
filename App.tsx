@@ -83,6 +83,17 @@ const App: React.FC = () => {
   const pulseBrightnessRef = useRef<number>(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const beatsRef = useRef<Beat[]>([]);
+  
+  // Performance optimization: Cache canvas dimensions and context
+  const canvasSizeRef = useRef({ width: 0, height: 0 });
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  
+  // Cache gradients and computed values
+  const gradientCacheRef = useRef<Map<string, CanvasGradient>>(new Map());
+  const projectCacheRef = useRef<Map<string, any>>(new Map());
+  
+  // Track last countdown update frame for throttling
+  const lastCountdownFrameRef = useRef<number>(-1);
 
   // Initialize Nebulas and Floating Geo
   useEffect(() => {
@@ -205,6 +216,10 @@ const App: React.FC = () => {
       laneLasersRef.current = [0, 0, 0];
       pulseBrightnessRef.current = 0;
       activeLanesRef.current = [false, false, false];
+      
+      // Clear caches on game start
+      gradientCacheRef.current.clear();
+      projectCacheRef.current.clear();
 
       // Sync State
       setScore(0);
@@ -386,16 +401,29 @@ const App: React.FC = () => {
     if (gameState !== GameState.PLAYING) {
       cancelAnimationFrame(frameRef.current);
       audioService.stop();
+      // Clear caches when not playing to free memory
+      if (gameState === GameState.FINISHED || gameState === GameState.SETUP) {
+        gradientCacheRef.current.clear();
+        projectCacheRef.current.clear();
+      }
       return;
     }
 
     const loop = () => {
       const now = audioService.getCurrentTime();
-
-      // Update Display Time for Countdown (low frequency update)
+      
+      // Update Display Time for Countdown (low frequency update - throttle to 10fps)
       // FIX: Allow updating past 0 to ensure the UI state flips to positive (hiding the overlay)
       if (now < 0.5) {
+        const currentFrame = Math.floor(now * 10);
+        if (currentFrame !== lastCountdownFrameRef.current) {
+          lastCountdownFrameRef.current = currentFrame;
+          setCurrentTimeDisplay(now);
+        }
+      } else if (now >= 0 && lastCountdownFrameRef.current < 0) {
+        // Ensure we update once when crossing 0
         setCurrentTimeDisplay(now);
+        lastCountdownFrameRef.current = Math.floor(now * 10);
       }
 
       const canvas = canvasRef.current;
@@ -420,9 +448,10 @@ const App: React.FC = () => {
         return prev;
       });
 
-      // Sync Heat (Throttled update for smooth UI bar)
-      if (Math.floor(now * 60) % 4 === 0) {
-        setHeat(heatRef.current);
+      // Sync Heat (Throttled update for smooth UI bar - only update every 4 frames)
+      const frameCount = Math.floor(now * 60);
+      if (frameCount % 4 === 0) {
+          setHeat(heatRef.current);
       }
 
       // Check finish
@@ -434,59 +463,54 @@ const App: React.FC = () => {
         return;
       }
 
-      // Check misses
+      // Check misses (optimized: break early when possible)
       if (now > 0) {
-        beatsRef.current.forEach((beat) => {
+        let missedAny = false;
+        for (let i = 0; i < beatsRef.current.length; i++) {
+          const beat = beatsRef.current[i];
           if (!beat.hit && !beat.missed && now > beat.time + HIT_WINDOW) {
             beat.missed = true;
-            // Penalty
-            comboRef.current = 0;
-            heatRef.current = Math.max(0, heatRef.current - 15);
-
-            setCombo(0);
-            setHeat(heatRef.current);
+            missedAny = true;
           }
-        });
-      }
-
-      // Update Entities (In-place mutation to reduce GC)
-      let i = 0;
-      while (i < textRef.current.length) {
-        const t = textRef.current[i];
-        t.y -= 1.5;
-        t.opacity -= 0.02;
-        if (t.opacity <= 0) {
-          textRef.current.splice(i, 1);
-        } else {
-          i++;
+        }
+        if (missedAny) {
+          // Penalty (only update once if multiple misses)
+          comboRef.current = 0;
+          heatRef.current = Math.max(0, heatRef.current - 15);
+          setCombo(0);
+          setHeat(heatRef.current);
         }
       }
 
-      i = 0;
-      while (i < debrisRef.current.length) {
-        const p = debrisRef.current[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.8;
-        p.rotation += p.deltaRotation;
-        p.life -= 0.02;
-        if (p.life <= 0) {
-          debrisRef.current.splice(i, 1);
-        } else {
-          i++;
-        }
+      // Update Entities (optimized: use reverse iteration to avoid index shifting)
+      for (let i = textRef.current.length - 1; i >= 0; i--) {
+          const t = textRef.current[i];
+          t.y -= 1.5;
+          t.opacity -= 0.02;
+          if (t.opacity <= 0) {
+              textRef.current.splice(i, 1);
+          }
       }
 
-      i = 0;
-      while (i < shockwavesRef.current.length) {
-        const s = shockwavesRef.current[i];
-        s.size += 15;
-        s.opacity -= 0.05;
-        if (s.opacity <= 0) {
-          shockwavesRef.current.splice(i, 1);
-        } else {
-          i++;
-        }
+      for (let i = debrisRef.current.length - 1; i >= 0; i--) {
+          const p = debrisRef.current[i];
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vy += 0.8;
+          p.rotation += p.deltaRotation;
+          p.life -= 0.02;
+          if (p.life <= 0) {
+              debrisRef.current.splice(i, 1);
+          }
+      }
+
+      for (let i = shockwavesRef.current.length - 1; i >= 0; i--) {
+          const s = shockwavesRef.current[i];
+          s.size += 15;
+          s.opacity -= 0.05;
+          if (s.opacity <= 0) {
+              shockwavesRef.current.splice(i, 1);
+          }
       }
 
       floatingGeoRef.current.forEach((g) => {
@@ -495,10 +519,37 @@ const App: React.FC = () => {
 
       // --- RENDERING ---
       if (canvas) {
-        const ctx = canvas.getContext("2d");
+        // Only resize canvas when dimensions actually change
+        const newWidth = window.innerWidth;
+        const newHeight = window.innerHeight;
+        if (canvasSizeRef.current.width !== newWidth || canvasSizeRef.current.height !== newHeight) {
+          canvas.width = newWidth;
+          canvas.height = newHeight;
+          canvasSizeRef.current = { width: newWidth, height: newHeight };
+          gradientCacheRef.current.clear(); // Clear cache on resize
+          projectCacheRef.current.clear();
+        }
+        
+        let ctx = ctxRef.current;
+        if (!ctx) {
+          ctx = canvas.getContext('2d', { 
+            alpha: false, 
+            desynchronized: true,
+            willReadFrequently: false 
+          });
+          if (ctx) {
+            ctxRef.current = ctx;
+            // Set default rendering hints for better performance
+            if ('imageSmoothingEnabled' in ctx) {
+              (ctx as CanvasRenderingContext2D & { imageSmoothingEnabled: boolean }).imageSmoothingEnabled = true;
+            }
+            if ('imageSmoothingQuality' in ctx) {
+              (ctx as CanvasRenderingContext2D & { imageSmoothingQuality: string }).imageSmoothingQuality = 'high';
+            }
+          }
+        }
+        
         if (ctx) {
-          canvas.width = window.innerWidth;
-          canvas.height = window.innerHeight;
           const w = canvas.width;
           const h = canvas.height;
 
@@ -525,44 +576,53 @@ const App: React.FC = () => {
 
           // 0. BACKGROUND & SKYBOX
           const bgColors = TIER_BG_COLORS[tierVal];
-
-          const grad = ctx.createRadialGradient(
-            cx,
-            cy * 0.5 + bounceY,
-            0,
-            cx,
-            cy,
-            Math.max(w, h)
-          );
-          grad.addColorStop(0, bgColors.center);
-          grad.addColorStop(1, bgColors.outer);
-
+          
+          // Cache gradient by tier and bounce (rounded to reduce cache size)
+          const bounceRounded = Math.round(bounceY * 10) / 10;
+          const bgGradKey = `bg_${tierVal}_${bounceRounded}`;
+          let grad = gradientCacheRef.current.get(bgGradKey);
+          if (!grad) {
+            grad = ctx.createRadialGradient(cx, cy * 0.5 + bounceY, 0, cx, cy, Math.max(w, h));
+            grad.addColorStop(0, bgColors.center);
+            grad.addColorStop(1, bgColors.outer);
+            gradientCacheRef.current.set(bgGradKey, grad);
+            // Limit cache size
+            if (gradientCacheRef.current.size > 50) {
+              const firstKey = gradientCacheRef.current.keys().next().value;
+              gradientCacheRef.current.delete(firstKey);
+            }
+          }
+          
           ctx.fillStyle = grad;
           ctx.fillRect(-20, -20, w + 40, h + 40);
 
-          // 1. NEBULA FOG SYSTEM
+          // 1. NEBULA FOG SYSTEM (optimized: batch path operations)
           const nebulaColor = TIER_NEBULA_COLORS[tierVal];
-          ctx.globalCompositeOperation = "screen";
-
-          nebulaRef.current.forEach((n) => {
+          ctx.globalCompositeOperation = 'screen'; 
+          
+          // Pre-calculate nebula positions
+          const nebulaData = nebulaRef.current.map(n => {
             const offsetX = Math.sin(now * n.speed + n.phase) * 50;
             const offsetY = Math.cos(now * n.speed * 0.7 + n.phase) * 30;
             const pulse = 1 + Math.sin(now * 2 + n.phase) * 0.1;
-
-            const x = n.baseX + offsetX;
-            const y = n.baseY + offsetY + bounceY * 0.5;
-            const r = n.radius * pulse;
-
+            return {
+              x: n.baseX + offsetX,
+              y: n.baseY + offsetY + bounceY * 0.5,
+              r: n.radius * pulse
+            };
+          });
+          
+          // Batch draw nebulas
+          for (const { x, y, r } of nebulaData) {
             const nGrad = ctx.createRadialGradient(x, y, 0, x, y, r);
             nGrad.addColorStop(0, nebulaColor);
-            nGrad.addColorStop(1, "rgba(0,0,0,0)");
-
+            nGrad.addColorStop(1, 'rgba(0,0,0,0)');
             ctx.fillStyle = nGrad;
             ctx.beginPath();
             ctx.arc(x, y, r, 0, Math.PI * 2);
             ctx.fill();
-          });
-
+          }
+          
           // 1.5 FLOATING GEOMETRY
           ctx.strokeStyle = `rgba(255,255,255,${0.05 + heatVal / 1000})`;
           ctx.lineWidth = 2;
@@ -617,21 +677,38 @@ const App: React.FC = () => {
             ctx.globalCompositeOperation = "source-over";
           }
 
-          // 3D Projection
+          // 3D Projection (with caching)
           const project = (progress: number, laneIndex: number) => {
-            const horizonRealY = h * HORIZON_Y + bounceY;
-            const bottomRealY = h + bounceY;
+             // Cache projection results (rounded to reduce cache size)
+             const progressRounded = Math.round(progress * 100) / 100;
+             const bounceRounded = Math.round(bounceY * 10) / 10;
+             const cacheKey = `p_${progressRounded}_${laneIndex}_${bounceRounded}`;
+             
+             let cached = projectCacheRef.current.get(cacheKey);
+             if (cached) return cached;
+             
+             const horizonRealY = (h * HORIZON_Y) + bounceY;
+             const bottomRealY = h + bounceY; 
+             
+             const y = horizonRealY + (progress * (bottomRealY - horizonRealY));
+             
+             const scale = PERSPECTIVE + (1 - PERSPECTIVE) * progress;
+             const currentTrackWidth = TRACK_WIDTH_BOTTOM * scale;
+             const laneWidth = currentTrackWidth / LANES;
+             const centerX = w / 2;
+             const laneOffset = (laneIndex - 1) * laneWidth;
+             const x = centerX + laneOffset;
 
-            const y = horizonRealY + progress * (bottomRealY - horizonRealY);
-
-            const scale = PERSPECTIVE + (1 - PERSPECTIVE) * progress;
-            const currentTrackWidth = TRACK_WIDTH_BOTTOM * scale;
-            const laneWidth = currentTrackWidth / LANES;
-            const centerX = w / 2;
-            const laneOffset = (laneIndex - 1) * laneWidth;
-            const x = centerX + laneOffset;
-
-            return { x, y, scale, laneWidth, currentTrackWidth };
+             const result = { x, y, scale, laneWidth, currentTrackWidth };
+             projectCacheRef.current.set(cacheKey, result);
+             
+             // Limit cache size
+             if (projectCacheRef.current.size > 200) {
+               const firstKey = projectCacheRef.current.keys().next().value;
+               projectCacheRef.current.delete(firstKey);
+             }
+             
+             return result;
           };
 
           const laneStart = project(0, 1);
@@ -651,21 +728,19 @@ const App: React.FC = () => {
           ctx.closePath();
           ctx.clip();
 
-          // Floor Gradient
-          const floorAlpha = 0.5 + heatVal / 200;
-          const floorColor =
-            heatVal > 80
-              ? `rgba(80, 0, 50, ${floorAlpha})`
-              : `rgba(20, 30, 40, ${floorAlpha})`;
-          const floorGrad = ctx.createLinearGradient(
-            0,
-            laneStart.y,
-            0,
-            laneEnd.y
-          );
-          floorGrad.addColorStop(0, "rgba(0,0,0,0)");
-          floorGrad.addColorStop(0.2, floorColor);
-          floorGrad.addColorStop(1, floorColor);
+          // Floor Gradient (cached)
+          const floorAlpha = 0.5 + (heatVal/200);
+          const floorAlphaRounded = Math.round(floorAlpha * 100) / 100;
+          const floorGradKey = `floor_${heatVal > 80 ? 1 : 0}_${floorAlphaRounded}_${Math.round(laneStart.y)}_${Math.round(laneEnd.y)}`;
+          let floorGrad = gradientCacheRef.current.get(floorGradKey);
+          if (!floorGrad) {
+            const floorColor = heatVal > 80 ? `rgba(80, 0, 50, ${floorAlpha})` : `rgba(20, 30, 40, ${floorAlpha})`;
+            floorGrad = ctx.createLinearGradient(0, laneStart.y, 0, laneEnd.y);
+            floorGrad.addColorStop(0, 'rgba(0,0,0,0)');
+            floorGrad.addColorStop(0.2, floorColor);
+            floorGrad.addColorStop(1, floorColor);
+            gradientCacheRef.current.set(floorGradKey, floorGrad);
+          }
           ctx.fillStyle = floorGrad;
           ctx.fill();
 
@@ -714,30 +789,28 @@ const App: React.FC = () => {
             ctx.stroke();
           }
 
-          // Horizontal Grid Lines
-          for (let i = 0; i < 12; i++) {
-            let lineProgress = i / 12 + gridOffset;
-            if (lineProgress > 1) lineProgress -= 1;
-            if (lineProgress < 0) lineProgress += 1;
-
-            const p = project(lineProgress, 1);
-
-            ctx.beginPath();
-            ctx.moveTo(w / 2 - p.currentTrackWidth / 2, p.y);
-            ctx.lineTo(w / 2 + p.currentTrackWidth / 2, p.y);
-            const alpha = (0.05 + lineProgress * 0.1) * (1 + heatVal / 200);
-
-            // Climax visual: Glow lines at high heat
-            if (heatVal > 90) {
-              ctx.shadowBlur = 10;
-              ctx.shadowColor = "#d946ef";
-              ctx.strokeStyle = `rgba(255, 100, 255, ${alpha})`;
-            } else {
-              ctx.shadowBlur = 0;
-              ctx.strokeStyle = `rgba(255,255,255, ${alpha})`;
-            }
-
-            ctx.stroke();
+          // Horizontal Grid Lines (optimized: pre-calculate and batch where possible)
+          const hasGlow = heatVal > 90;
+          if (hasGlow) {
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#d946ef';
+          }
+          
+          for(let i=0; i<12; i++) {
+              let lineProgress = (i / 12) + gridOffset;
+              if (lineProgress > 1) lineProgress -= 1;
+              if (lineProgress < 0) lineProgress += 1;
+              
+              const p = project(lineProgress, 1);
+              const alpha = (0.05 + (lineProgress * 0.1)) * (1 + heatVal/200);
+              
+              ctx.beginPath();
+              ctx.moveTo(w/2 - p.currentTrackWidth/2, p.y);
+              ctx.lineTo(w/2 + p.currentTrackWidth/2, p.y);
+              ctx.strokeStyle = hasGlow 
+                ? `rgba(255, 100, 255, ${alpha})`
+                : `rgba(255,255,255, ${alpha})`;
+              ctx.stroke();
           }
           ctx.shadowBlur = 0; // Reset
           ctx.restore();
@@ -763,18 +836,17 @@ const App: React.FC = () => {
           }
           ctx.globalAlpha = 1.0;
 
-          // 3. HORIZON BLEND
+          // 3. HORIZON BLEND (cached)
           const horizonH = h * 0.2;
-          const fogGrad = ctx.createLinearGradient(
-            0,
-            laneStart.y - horizonH * 0.5,
-            0,
-            laneStart.y + horizonH
-          );
-          fogGrad.addColorStop(0, bgColors.center);
-          fogGrad.addColorStop(0.4, bgColors.center);
-          fogGrad.addColorStop(1, "rgba(0,0,0,0)");
-
+          const fogGradKey = `fog_${tierVal}_${Math.round(laneStart.y)}`;
+          let fogGrad = gradientCacheRef.current.get(fogGradKey);
+          if (!fogGrad) {
+            fogGrad = ctx.createLinearGradient(0, laneStart.y - horizonH * 0.5, 0, laneStart.y + horizonH);
+            fogGrad.addColorStop(0, bgColors.center); 
+            fogGrad.addColorStop(0.4, bgColors.center);
+            fogGrad.addColorStop(1, 'rgba(0,0,0,0)');
+            gradientCacheRef.current.set(fogGradKey, fogGrad);
+          }
           ctx.fillStyle = fogGrad;
           ctx.fillRect(0, laneStart.y - horizonH, w, horizonH * 2);
 
@@ -852,89 +924,97 @@ const App: React.FC = () => {
             }
           }
 
-          // 6. Draw Notes
-          beatsRef.current.forEach((beat) => {
-            if (beat.hit) return;
+          // 6. Draw Notes (optimized: batch drawing operations)
+          const visibleBeats: Array<{beat: Beat, p: any, color: string, width: number, height: number}> = [];
+          
+          for (let i = 0; i < beatsRef.current.length; i++) {
+             const beat = beatsRef.current[i];
+             if (beat.hit) continue;
+             
+             const timeToHit = beat.time - now; 
+             if (timeToHit > FALL_TIME || timeToHit < -0.2) continue;
 
-            const timeToHit = beat.time - now;
-            if (timeToHit > FALL_TIME || timeToHit < -0.2) return;
+             const progress = hitVisualProgress - (timeToHit / FALL_TIME * hitVisualProgress);
+             if (progress < 0 || progress > 1.1) continue;
 
-            const progress =
-              hitVisualProgress - (timeToHit / FALL_TIME) * hitVisualProgress;
-            if (progress < 0 || progress > 1.1) return;
+             const p = project(progress, beat.lane);
+             const color = COLORS[beat.lane];
 
-            const p = project(progress, beat.lane);
-            const color = COLORS[beat.lane];
+             if (!beat.missed) {
+               const size = 25 * p.scale;
+               let width = p.laneWidth * 0.8;
+               let height = size;
 
-            if (!beat.missed) {
-              const size = 25 * p.scale;
-              let width = p.laneWidth * 0.8;
-              let height = size;
-
-              // Squashing effect
-              if (timeToHit < 0.1 && timeToHit > 0) {
-                height *= 0.7;
-                width *= 1.2;
-              }
-
-              ctx.shadowBlur = 15 * p.scale;
+               // Squashing effect
+               if (timeToHit < 0.1 && timeToHit > 0) {
+                   height *= 0.7;
+                   width *= 1.2;
+               }
+               
+               visibleBeats.push({ beat, p, color, width, height });
+             }
+          }
+          
+          // Batch draw notes with same shadow settings
+          if (visibleBeats.length > 0) {
+            ctx.shadowBlur = 15;
+            for (const { p, color, width, height } of visibleBeats) {
               ctx.shadowColor = color;
               ctx.fillStyle = color;
-
-              // Draw Note Block
-              ctx.fillRect(p.x - width / 2, p.y - height / 2, width, height);
-
-              // Highlight
-              ctx.fillStyle = "white";
-              ctx.globalAlpha = 0.5;
-              ctx.fillRect(
-                p.x - width / 2,
-                p.y - height / 2,
-                width,
-                height * 0.3
-              );
-              ctx.globalAlpha = 1.0;
-              ctx.shadowBlur = 0;
+              ctx.fillRect(p.x - width/2, p.y - height/2, width, height);
             }
-          });
-
-          // 7. Draw Effects
-          shockwavesRef.current.forEach((sw) => {
-            ctx.beginPath();
-            ctx.ellipse(sw.x, sw.y, sw.size, sw.size * 0.6, 0, 0, Math.PI * 2);
-            ctx.strokeStyle = sw.color;
-            ctx.lineWidth = 4;
-            ctx.globalAlpha = sw.opacity;
-            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // Batch draw highlights
+            ctx.fillStyle = 'white';
+            ctx.globalAlpha = 0.5;
+            for (const { p, width, height } of visibleBeats) {
+              ctx.fillRect(p.x - width/2, p.y - height/2, width, height * 0.3);
+            }
             ctx.globalAlpha = 1.0;
-          });
+          }
 
-          // Draw Rotating Debris
-          debrisRef.current.forEach((d) => {
-            ctx.save();
-            ctx.translate(d.x, d.y);
-            ctx.rotate(d.rotation);
-            ctx.fillStyle = d.color;
-            ctx.globalAlpha = d.life;
-            const s = d.size;
-            ctx.fillRect(-s / 2, -s / 2, s, s);
-            ctx.restore();
-          });
-          ctx.globalAlpha = 1.0;
+          // 7. Draw Effects (optimized: batch by color/opacity)
+          if (shockwavesRef.current.length > 0) {
+            ctx.lineWidth = 4;
+            for (const sw of shockwavesRef.current) {
+              ctx.beginPath();
+              ctx.ellipse(sw.x, sw.y, sw.size, sw.size * 0.6, 0, 0, Math.PI * 2);
+              ctx.strokeStyle = sw.color;
+              ctx.globalAlpha = sw.opacity;
+              ctx.stroke();
+            }
+            ctx.globalAlpha = 1.0;
+          }
 
-          // 8. Breathing Vignette
-          const vignettePulse = 1.0 + Math.sin(now * 8) * 0.05;
-          const vignetteScale = 1.0 - heatVal / 200;
-          const vGrad = ctx.createRadialGradient(
-            cx,
-            cy,
-            h * 0.4 * vignetteScale * vignettePulse,
-            cx,
-            cy,
-            h * 0.9
-          );
-          vGrad.addColorStop(0, "rgba(0,0,0,0)");
-          vGrad.addColorStop(1, "rgba(0,0,0,0.8)");
+          // Draw Rotating Debris (optimized: batch operations)
+          if (debrisRef.current.length > 0) {
+            for (const d of debrisRef.current) {
+              ctx.save();
+              ctx.translate(d.x, d.y);
+              ctx.rotate(d.rotation);
+              ctx.fillStyle = d.color;
+              ctx.globalAlpha = d.life;
+              const s = d.size;
+              ctx.fillRect(-s/2, -s/2, s, s);
+              ctx.restore();
+            }
+            ctx.globalAlpha = 1.0;
+          }
+          
+          // 8. Breathing Vignette (cached, but pulse changes so cache with rounded values)
+          const vignettePulse = 1.0 + Math.sin(now * 8) * 0.05; 
+          const vignetteScale = 1.0 - (heatVal / 200);
+          const pulseRounded = Math.round(vignettePulse * 100) / 100;
+          const scaleRounded = Math.round(vignetteScale * 100) / 100;
+          const vGradKey = `vignette_${pulseRounded}_${scaleRounded}`;
+          let vGrad = gradientCacheRef.current.get(vGradKey);
+          if (!vGrad) {
+            vGrad = ctx.createRadialGradient(cx, cy, h * 0.4 * vignetteScale * vignettePulse, cx, cy, h * 0.9);
+            vGrad.addColorStop(0, 'rgba(0,0,0,0)');
+            vGrad.addColorStop(1, 'rgba(0,0,0,0.8)');
+            gradientCacheRef.current.set(vGradKey, vGrad);
+          }
           ctx.fillStyle = vGrad;
           ctx.fillRect(0, 0, w, h);
 
@@ -949,16 +1029,30 @@ const App: React.FC = () => {
     return () => cancelAnimationFrame(frameRef.current);
   }, [gameState]); // Only depends on gameState!
 
-  // Handle Resize
+  // Handle Resize (throttled for performance)
   useEffect(() => {
+    let resizeTimeout: number;
     const handleResize = () => {
-      if (canvasRef.current) {
-        canvasRef.current.width = window.innerWidth;
-        canvasRef.current.height = window.innerHeight;
-      }
+      clearTimeout(resizeTimeout);
+      resizeTimeout = window.setTimeout(() => {
+        if (canvasRef.current) {
+          const newWidth = window.innerWidth;
+          const newHeight = window.innerHeight;
+          if (canvasSizeRef.current.width !== newWidth || canvasSizeRef.current.height !== newHeight) {
+            canvasRef.current.width = newWidth;
+            canvasRef.current.height = newHeight;
+            canvasSizeRef.current = { width: newWidth, height: newHeight };
+            gradientCacheRef.current.clear();
+            projectCacheRef.current.clear();
+          }
+        }
+      }, 100); // Throttle resize to 100ms
     };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    window.addEventListener('resize', handleResize, { passive: true });
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(resizeTimeout);
+    };
   }, []);
 
   const getCountdownText = () => {
