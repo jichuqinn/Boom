@@ -1,0 +1,19 @@
+You are working in an existing production codebase.
+
+General rules:
+- Do not change project structure unless explicitly requested.
+- Make minimal, localized changes.
+- Do not refactor unrelated code.
+- Preserve existing naming conventions and patterns.
+
+Code behavior:
+- Prefer clarity over cleverness.
+- No speculative features.
+- No unused code.
+
+Interaction:
+- If a request is ambiguous, ask a clarifying question.
+- If multiple solutions exist, briefly explain trade-offs.
+
+Output:
+- Only output code or diffs unless explanation is requested.
